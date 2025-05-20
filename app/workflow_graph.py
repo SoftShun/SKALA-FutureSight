@@ -171,6 +171,13 @@ def handle_error(state: TrendAnalysisState) -> TrendAnalysisState:
     
     return state
 
+# 워크플로우 종료 함수 추가
+def end_workflow(state: TrendAnalysisState) -> TrendAnalysisState:
+    """워크플로우를 종료합니다."""
+    if state.get("callback"):
+        state["callback"]("워크플로우 종료")
+    return state
+
 # 조건부 라우팅 함수
 def should_handle_error(state: TrendAnalysisState) -> str:
     """상태에 오류가 있는지 확인하고 라우팅합니다."""
@@ -178,6 +185,7 @@ def should_handle_error(state: TrendAnalysisState) -> str:
         return "error"
     return "continue"
 
+# LangGraph 도구 관련 함수 대신 더 간단한 방법 사용
 class TrendAnalysisGraphWorkflow:
     """LangGraph를 사용한 기술 트렌드 분석 워크플로우 클래스"""
     
@@ -192,14 +200,19 @@ class TrendAnalysisGraphWorkflow:
         builder.add_node("generate_report", generate_report)
         builder.add_node("convert_report", convert_report)
         builder.add_node("handle_error", handle_error)
+        builder.add_node("end_workflow", end_workflow)  # 종료 노드 추가
         
-        # START 노드에서 첫 번째 노드로의 에지 추가 (중요!)
-        builder.add_edge("START", "create_plan")
+        # 시작점 설정
+        builder.set_entry_point("create_plan")
+        
+        # 종료 노드 설정 (구체적인 노드 이름 사용)
+        builder.set_finish_point("end_workflow")
         
         # 에지 추가 (기본 흐름)
         builder.add_edge("create_plan", "perform_research")
         builder.add_edge("perform_research", "generate_report")
         builder.add_edge("generate_report", "convert_report")
+        builder.add_edge("convert_report", "end_workflow")  # 변환 후 종료 노드로
         
         # 조건부 에지 추가 (오류 처리)
         builder.add_conditional_edges(
@@ -234,12 +247,12 @@ class TrendAnalysisGraphWorkflow:
             should_handle_error,
             {
                 "error": "handle_error",
-                "continue": "END"
+                "continue": "end_workflow"  # END 대신 end_workflow 노드로
             }
         )
         
-        # 오류 처리 노드는 종료로 설정
-        builder.add_edge("handle_error", "END")
+        # 오류 처리 노드는 종료 노드로 설정
+        builder.add_edge("handle_error", "end_workflow")  # END 대신 end_workflow 노드로
         
         # 그래프 컴파일
         self.graph = builder.compile()
@@ -303,12 +316,11 @@ class TrendAnalysisGraphWorkflow:
         if self.callback:
             self.callback("워크플로우 시작")
         
-        # 그래프 실행
+        # 그래프 실행 (run → invoke로 변경)
         config = {"recursion_limit": 25}
-        result = self.graph.run(
+        result = self.graph.invoke(
             initial_state,
-            config,
-            checkpoint_saver=self.memory_saver
+            config
         )
         
         # 결과 반환
