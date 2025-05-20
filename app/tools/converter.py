@@ -10,6 +10,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 
 # DOCX 변환용
 from docx import Document
@@ -72,6 +74,10 @@ class ReportConverter:
         """마크다운을 PDF로 변환"""
         output_path = self.output_dir / f"{filename}.pdf"
         
+        # 한글 폰트 등록
+        gothic_font_path = "/System/Library/Fonts/Supplemental/AppleGothic.ttf"
+        pdfmetrics.registerFont(TTFont("AppleGothic", gothic_font_path))
+        
         # 마크다운을 HTML로 변환
         html = markdown.markdown(markdown_content, extensions=['tables', 'fenced_code'])
         
@@ -80,13 +86,55 @@ class ReportConverter:
         styles = getSampleStyleSheet()
         flowables = []
         
-        # HTML을 단순화하여 처리 (복잡한 HTML 구조는 생략)
-        lines = html.split("\n")
-        for line in lines:
-            if line.strip():
-                p = Paragraph(line, styles["Normal"])
-                flowables.append(p)
-                flowables.append(Spacer(1, 6))
+        # 한글을 위한 스타일 정의
+        korean_style = ParagraphStyle(
+            'KoreanStyle',
+            parent=styles['Normal'],
+            fontName='AppleGothic',
+            fontSize=10,
+            leading=14,
+            spaceAfter=10
+        )
+        
+        # 한글을 위한 제목 스타일 정의
+        korean_heading1 = ParagraphStyle(
+            'KoreanHeading1',
+            parent=styles['Heading1'],
+            fontName='AppleGothic',
+            fontSize=16,
+            leading=20,
+            spaceAfter=12
+        )
+        
+        korean_heading2 = ParagraphStyle(
+            'KoreanHeading2',
+            parent=styles['Heading2'],
+            fontName='AppleGothic',
+            fontSize=14,
+            leading=18,
+            spaceAfter=10
+        )
+        
+        # HTML 파싱하여 처리
+        soup = BeautifulSoup(html, 'html.parser')
+        
+        # HTML 구조에서 텍스트 추출 및 적절한 스타일 적용
+        for element in soup.find_all(['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'ul', 'ol', 'li']):
+            text = element.get_text().strip()
+            if not text:
+                continue
+                
+            if element.name == 'h1':
+                p = Paragraph(text, korean_heading1)
+            elif element.name == 'h2':
+                p = Paragraph(text, korean_heading2)
+            elif element.name in ['h3', 'h4', 'h5', 'h6']:
+                p = Paragraph(text, korean_heading2)
+            else:
+                p = Paragraph(text, korean_style)
+                
+            flowables.append(p)
+            flowables.append(Spacer(1, 6))
         
         doc.build(flowables)
         return str(output_path)
@@ -98,9 +146,9 @@ class ReportConverter:
         # 새 Word 문서 생성
         doc = Document()
         
-        # 기본 스타일 설정
+        # 기본 스타일 설정 - 한글 지원 범용 폰트로 변경
         style = doc.styles['Normal']
-        style.font.name = 'Arial'
+        style.font.name = 'Malgun Gothic'  # Windows의 경우 '맑은 고딕', Mac의 경우 AppleGothic과 호환
         style.font.size = Pt(11)
         
         # 마크다운 내용을 단순화하여 처리
@@ -112,11 +160,17 @@ class ReportConverter:
             
             # 제목 처리
             if line.startswith('# '):
-                doc.add_heading(line[2:], level=1)
+                heading = doc.add_heading(line[2:], level=1)
+                for run in heading.runs:
+                    run.font.name = 'Malgun Gothic'  # 제목도 한글 폰트로 설정
             elif line.startswith('## '):
-                doc.add_heading(line[3:], level=2)
+                heading = doc.add_heading(line[3:], level=2)
+                for run in heading.runs:
+                    run.font.name = 'Malgun Gothic'
             elif line.startswith('### '):
-                doc.add_heading(line[4:], level=3)
+                heading = doc.add_heading(line[4:], level=3)
+                for run in heading.runs:
+                    run.font.name = 'Malgun Gothic'
             # 빈 줄 처리
             elif not line:
                 current_paragraph = None
@@ -124,7 +178,8 @@ class ReportConverter:
             else:
                 if current_paragraph is None:
                     current_paragraph = doc.add_paragraph()
-                current_paragraph.add_run(line)
+                run = current_paragraph.add_run(line)
+                run.font.name = 'Malgun Gothic'  # 각 텍스트 블록마다 폰트 설정
         
         # 문서 저장
         doc.save(str(output_path))
