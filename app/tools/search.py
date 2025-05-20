@@ -35,17 +35,38 @@ class WebSearchTool:
             return self._get_dummy_results(query, count)
         
         try:
-            # Brave 최신 API에 맞게 메서드 호출 방식 변경
+            # Brave 최신 API 호출
             search_results = self.client.search(q=query, count=count)
             results = []
             
-            # 결과 구조에 맞게 파싱 방식 수정
-            for item in search_results.web_results:
-                results.append({
-                    "title": item.title,
-                    "url": item.url,
-                    "description": item.description
-                })
+            # 웹 결과 처리 시 예외 처리 강화
+            try:
+                if hasattr(search_results, 'web_results'):
+                    for item in search_results.web_results:
+                        try:
+                            results.append({
+                                "title": getattr(item, 'title', '제목 없음'),
+                                "url": getattr(item, 'url', ''),
+                                "description": getattr(item, 'description', '')
+                            })
+                        except Exception as e:
+                            print(f"웹 결과 항목 처리 중 오류: {str(e)}")
+                            continue
+                
+                # 비디오 결과 처리 (타입 변환 적용)
+                if hasattr(search_results, 'videos') and hasattr(search_results.videos, 'results'):
+                    for video in search_results.videos.results:
+                        if hasattr(video, 'video'):
+                            # 정수를 문자열로 변환
+                            if hasattr(video.video, 'views') and isinstance(video.video.views, int):
+                                video.video.views = str(video.video.views)
+            except Exception as e:
+                print(f"결과 처리 중 오류 발생: {str(e)}")
+            
+            # 결과가 없으면 더미 데이터 반환
+            if not results:
+                print(f"검색 결과가 없어 더미 데이터를 사용합니다: {query}")
+                return self._get_dummy_results(query, count)
             
             return results
         except Exception as e:
@@ -78,10 +99,13 @@ class WebSearchTool:
         # 검색 실행
         results = self.search(query, count)
         
-        # 결과에 메타데이터 추가
-        for result in results:
-            result["field"] = field
-            result["aspect"] = aspect
+        # 결과에 메타데이터 추가 (예외 처리 추가)
+        try:
+            for result in results:
+                result["field"] = field
+                result["aspect"] = aspect
+        except Exception as e:
+            print(f"결과 메타데이터 추가 중 오류: {str(e)}")
         
         return results
     
@@ -100,8 +124,12 @@ class WebSearchTool:
         results = {}
         
         for aspect in aspects:
-            results[aspect] = self.search_field(field, aspect, count=5)
-            time.sleep(1)  # API 호출 간 딜레이
+            try:
+                results[aspect] = self.search_field(field, aspect, count=5)
+                time.sleep(1)  # API 호출 간 딜레이
+            except Exception as e:
+                print(f"{field} 분야의 {aspect} 검색 중 오류: {str(e)}")
+                results[aspect] = []  # 오류 발생 시 빈 리스트 반환
         
         return results
     

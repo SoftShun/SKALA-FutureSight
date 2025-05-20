@@ -4,7 +4,7 @@ import time
 from typing import Dict, List, Any, Optional, TypedDict, Annotated, Callable
 from pathlib import Path
 
-from langgraph.graph import StateGraph
+from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
 from app.agents import CoordinatorAgent, ResearchAgent, ReportAgent
@@ -13,7 +13,7 @@ from app.tools.converter import ReportConverter
 # 상태 유형 정의
 class TrendAnalysisState(TypedDict):
     """기술 트렌드 분석 워크플로우의 상태를 정의합니다."""
-    fields: List[str]
+    fields: Annotated[List[str], "선택된 기술 분야 목록"]
     format: str
     language: str
     depth: str
@@ -200,19 +200,16 @@ class TrendAnalysisGraphWorkflow:
         builder.add_node("generate_report", generate_report)
         builder.add_node("convert_report", convert_report)
         builder.add_node("handle_error", handle_error)
-        builder.add_node("end_workflow", end_workflow)  # 종료 노드 추가
+        builder.add_node("end_workflow", end_workflow)
         
-        # 시작점 설정
+        # 시작점 설정 (START 대신 set_entry_point 사용)
         builder.set_entry_point("create_plan")
-        
-        # 종료 노드 설정 (구체적인 노드 이름 사용)
-        builder.set_finish_point("end_workflow")
         
         # 에지 추가 (기본 흐름)
         builder.add_edge("create_plan", "perform_research")
         builder.add_edge("perform_research", "generate_report")
         builder.add_edge("generate_report", "convert_report")
-        builder.add_edge("convert_report", "end_workflow")  # 변환 후 종료 노드로
+        builder.add_edge("convert_report", "end_workflow")
         
         # 조건부 에지 추가 (오류 처리)
         builder.add_conditional_edges(
@@ -247,12 +244,13 @@ class TrendAnalysisGraphWorkflow:
             should_handle_error,
             {
                 "error": "handle_error",
-                "continue": "end_workflow"  # END 대신 end_workflow 노드로
+                "continue": "end_workflow"
             }
         )
         
-        # 오류 처리 노드는 종료 노드로 설정
-        builder.add_edge("handle_error", "end_workflow")  # END 대신 end_workflow 노드로
+        # 오류 처리 노드는 종료로 설정 ("END" 대신 END 상수 사용)
+        builder.add_edge("handle_error", END)
+        builder.add_edge("end_workflow", END)
         
         # 그래프 컴파일
         self.graph = builder.compile()
@@ -261,14 +259,7 @@ class TrendAnalysisGraphWorkflow:
         self.memory_saver = MemorySaver()
         
         # 상태 초기화
-        self.fields = []
-        self.format = "md"
-        self.language = "ko"
-        self.depth = "standard"
-        self.rag_enabled = False
-        self.rag_docs = []
-        self.output_path = None
-        self.callback = None
+        self.state = None
     
     def setup(
         self,
@@ -280,51 +271,73 @@ class TrendAnalysisGraphWorkflow:
         rag_docs: List[str] = None,
         callback: Optional[Callable[[str], None]] = None
     ) -> None:
-        """워크플로우 설정"""
-        self.fields = fields
-        self.format = format
-        self.language = language
-        self.depth = depth
-        self.rag_enabled = rag_enabled
-        self.rag_docs = rag_docs or []
-        self.callback = callback
+        """
+        워크플로우 설정
+        
+        Args:
+            fields: 선택된 기술 분야 목록
+            format: 보고서 형식
+            language: 보고서 언어
+            depth: 분석 깊이
+            rag_enabled: RAG 사용 여부
+            rag_docs: RAG 문서 목록
+            callback: 진행 상황 콜백 함수
+        """
+        # 초기 상태 설정 - 개별적으로 각 필드를 설정하여 오류 방지
+        initial_state = {}
+        initial_state["format"] = format
+        initial_state["language"] = language  
+        initial_state["depth"] = depth
+        initial_state["rag_enabled"] = rag_enabled
+        initial_state["rag_docs"] = rag_docs or []
+        initial_state["analysis_plan"] = None
+        initial_state["research_results"] = None
+        initial_state["report"] = None
+        initial_state["output_path"] = None
+        initial_state["status"] = "initialized"
+        initial_state["error"] = None
+        initial_state["callback"] = callback
+        
+        # fields는 Annotated 타입이므로 마지막에 별도로 설정
+        initial_state["fields"] = fields
+        
+        self.state = initial_state
     
     def run(self, callback: Optional[Callable[[str], None]] = None) -> str:
-        """워크플로우 실행"""
-        # 콜백 업데이트 (설정에서 호출된 경우)
-        if callback:
-            self.callback = callback
+        """
+        워크플로우 실행
+        
+        Args:
+            callback: 진행 상황 콜백 함수
             
-        # 초기 상태 설정
-        initial_state = TrendAnalysisState(
-            fields=self.fields,
-            format=self.format,
-            language=self.language,
-            depth=self.depth,
-            rag_enabled=self.rag_enabled,
-            rag_docs=self.rag_docs,
-            analysis_plan=None,
-            research_results=None,
-            report=None,
-            output_path=None,
-            status="starting",
-            error=None,
-            callback=self.callback
-        )
+        Returns:
+            str: 생성된 보고서 경로
+        """
+        if callback:
+            # 콜백 함수가 직접 전달된 경우 상태 업데이트
+            if self.state:
+                self.state["callback"] = callback
         
-        # 콜백 호출
-        if self.callback:
-            self.callback("워크플로우 시작")
+        # 초기 상태가 없는 경우 에러
+        if not self.state:
+            raise ValueError("워크플로우가 초기화되지 않았습니다. setup() 메서드를 먼저 호출하세요.")
         
-        # 그래프 실행 (run → invoke로 변경)
-        config = {"recursion_limit": 25}
-        result = self.graph.invoke(
-            initial_state,
-            config
-        )
+        # LangGraph 에러 방지를 위해 deep copy 사용
+        import copy
+        input_state = copy.deepcopy(self.state)
         
-        # 결과 반환
-        if result.get("error"):
-            raise RuntimeError(result["error"])
-        
-        return result.get("output_path", "")
+        try:
+            # 그래프 실행 - checkpoint_saver 파라미터 제거
+            result = self.graph.invoke(input_state)
+            
+            # 결과에서 출력 경로 반환
+            if result and "output_path" in result and result["output_path"]:
+                return result["output_path"]
+            else:
+                raise ValueError("보고서 생성에 실패했습니다.")
+        except Exception as e:
+            # LangGraph 예외 발생 시 세부 정보 출력
+            print(f"워크플로우 실행 중 오류 발생: {str(e)}")
+            if "fields" in str(e) and "multiple values" in str(e):
+                print("fields 키에 대한 다중 값 오류가 발생했습니다. 상태 초기화 방식을 확인하세요.")
+            raise
